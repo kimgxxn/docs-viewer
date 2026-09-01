@@ -131,6 +131,7 @@ docs-viewer/
   cache/              office 변환 캐시 + mermaid 스크립트 (자동 생성)
   assets/             mermaid.min.js 를 직접 넣어두고 싶을 때 (선택)
   mermaid-test.md     동작 확인용 예제 문서 (열어서 다이어그램이 그려지면 정상)
+  make-dist.sh        배포용 zip 생성 (dist/docs-viewer-<버전>.zip)
   README.md
   LICENSE             MIT
   THIRD-PARTY-NOTICES.md  동봉한 mermaid 스크립트의 라이선스 고지
