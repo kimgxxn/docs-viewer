@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# docs viewer 를 종료한다.
+# PID 파일이 없어도 (./dv 나 python3 로 직접 띄운 경우) 프로세스를 찾아서 끈다.
+set -e
+DIR=$(cd "$(dirname "$0")" && pwd)
+PIDFILE="$DIR/run.pid"
+
+# PID 파일 + 실제 프로세스 목록을 합쳐서 중복 없이 모은다.
+PIDS=""
+if [ -f "$PIDFILE" ]; then
+  PIDS=$(cat "$PIDFILE" 2>/dev/null || true)
+fi
+# 이 폴더의 뷰어만 대상으로 한다 (다른 경로에서 띄운 인스턴스는 건드리지 않음)
+for pid in $(pgrep -f 'docs_viewer\.py' 2>/dev/null || true); do
+  cwd=$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)
+  cmd=$(ps -p "$pid" -o command= 2>/dev/null || true)
+  case "$cmd $cwd" in
+    *"$DIR"*) PIDS="$PIDS $pid" ;;
+  esac
+done
+PIDS=$(echo "$PIDS" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -u || true)
+
+if [ -z "$PIDS" ]; then
+  rm -f "$PIDFILE"
+  echo "실행 중인 docs viewer 가 없습니다."
+  exit 0
+fi
+
+# SIGTERM 으로 정상 종료를 먼저 시도한다 (httpd.server_close 가 돌 시간을 준다)
+for pid in $PIDS; do
+  kill "$pid" 2>/dev/null || true
+done
+
+for _ in $(seq 1 50); do
+  ALIVE=""
+  for pid in $PIDS; do
+    kill -0 "$pid" 2>/dev/null && ALIVE="$ALIVE $pid"
+  done
+  [ -z "$ALIVE" ] && break
+  sleep 0.2
+done
+
+# 10초 안에 안 죽으면 강제 종료
+for pid in $PIDS; do
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "  pid $pid 가 응답하지 않아 강제 종료합니다."
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+done
+
+rm -f "$PIDFILE"
+echo "docs viewer 를 종료했습니다 (pid$(echo "$PIDS" | tr '\n' ' ' | sed 's/ $//' | sed 's/^/ /'))"

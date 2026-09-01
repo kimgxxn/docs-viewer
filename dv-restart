@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# 껐다 켠다. docs_viewer.py 는 soffice 탐지·설정 읽기를 기동 시 한 번만 하므로,
+# LibreOffice 를 새로 깔았거나 config.json 을 고쳤으면 이걸로 반영한다.
+set -e
+DIR=$(cd "$(dirname "$0")" && pwd)
+"$DIR/dv-stop"
+exec "$DIR/dv-start" "$@"

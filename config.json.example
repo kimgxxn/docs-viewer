@@ -1,0 +1,9 @@
+{
+  "roots": ["~/Documents", "~/workspace"],
+  "port": 8765,
+  "no_token": true,
+  "allow_edit": false,
+  "drive": false,
+  "show_hidden": false,
+  "no_mermaid": false
+}

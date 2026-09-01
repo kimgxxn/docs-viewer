@@ -1,0 +1,22 @@
+#!/bin/sh
+# docs viewer 런처 — 자주 쓰는 폴더를 기본값으로 띄운다.
+#   ./dv                 → 아래 ROOTS 를 열기
+#   ./dv ~/some/dir      → 지정한 폴더만 열기
+#   ./dv --port 9000 .   → 옵션 그대로 전달
+set -e
+DIR=$(cd "$(dirname "$0")" && pwd)
+
+# 인자가 없으면 여기 적어둔 폴더들을 사용 (원하는 경로로 수정하세요)
+ROOTS="$HOME/Documents $HOME/workspace"
+
+if [ $# -eq 0 ]; then
+  # 존재하는 폴더만 넘긴다
+  ARGS=""
+  for r in $ROOTS; do
+    [ -d "$r" ] && ARGS="$ARGS $r"
+  done
+  # shellcheck disable=SC2086
+  exec python3 "$DIR/docs_viewer.py" --no-token --drive $ARGS
+else
+  exec python3 "$DIR/docs_viewer.py" "$@"
+fi
