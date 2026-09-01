@@ -3,6 +3,9 @@
 로컬 문서 + Google Drive 문서를 브라우저에서 바로 보는 **의존성 없는 단일 파일 뷰어**.
 Python 3.7+ 표준 라이브러리만 사용합니다 (pip install 없음).
 
+**받기 → [최신 릴리스](https://github.com/kimgxxn/docs-viewer/releases/latest) 의 `docs-viewer-*.zip`**
+— 압축을 풀면 바로 실행됩니다. 처음이라면 아래 [빠른 시작](#빠른-시작-처음-받은-분) 을 보세요.
+
 ```bash
 ./dv                                                    # 런처 (기본 폴더 + Drive + 토큰 없이)
 python3 docs_viewer.py ~/Documents ~/workspace/notes    # 폴더 여러 개 등록
@@ -43,15 +46,34 @@ http://127.0.0.1:8765/?t=<token>  (기본값: 실행마다 랜덤 토큰)
 
 `pip install` 은 없습니다. 표준 라이브러리만 씁니다.
 
-**1) 압축을 풀고 폴더로 이동**
+**1) 내려받기**
+
+[**최신 릴리스**](https://github.com/kimgxxn/docs-viewer/releases/latest) 페이지에서 `docs-viewer-<버전>.zip` 을 받습니다.
+터미널에서 받으려면:
 
 ```bash
-unzip docs-viewer.zip && cd docs-viewer
+# gh CLI 가 있으면 (버전을 몰라도 최신 것을 받습니다)
+gh release download --repo kimgxxn/docs-viewer --pattern '*.zip'
+
+# 없으면 최신 릴리스의 zip 주소를 찾아서 받기
+curl -sL https://api.github.com/repos/kimgxxn/docs-viewer/releases/latest \
+  | grep -o 'https://[^"]*\.zip' | head -1 | xargs curl -LO
+```
+
+> `git clone https://github.com/kimgxxn/docs-viewer.git` 로 받아도 동작은 같습니다. 다만 **zip 에는
+> `assets/mermaid.min.js`(3.4MB) 가 동봉**되어 있어 네트워크 없이도 다이어그램이
+> 바로 그려지고, clone 은 처음 다이어그램을 볼 때 CDN 에서 한 번 내려받습니다.
+> 사내망이 CDN 을 막는다면 zip 쪽이 확실합니다.
+
+**2) 압축을 풀고 폴더로 이동**
+
+```bash
+unzip docs-viewer-*.zip && cd docs-viewer
 chmod +x dv dv-start dv-stop dv-restart   # 실행 권한이 지워졌을 때만
 xattr -dr com.apple.quarantine .          # macOS 가 "확인되지 않은 개발자" 라고 막을 때만
 ```
 
-**2) 볼 폴더 정하기** — 둘 중 편한 쪽
+**3) 볼 폴더 정하기** — 둘 중 편한 쪽
 
 ```bash
 # (a) 그때그때 인자로 넘기기
@@ -88,7 +110,7 @@ EOF
 | `show_hidden` | 숨김 파일 표시 |
 | `no_mermaid` | `true` 면 mermaid 다이어그램을 그리지 않음 (다운로드도 안 함) |
 
-**3) 띄우고 끄기**
+**4) 띄우고 끄기**
 
 ```bash
 ./dv-start     # 백그라운드 기동 → 브라우저가 자동으로 열립니다
