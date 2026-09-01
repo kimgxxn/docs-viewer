@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# docs viewer 를 백그라운드로 띄운다 (멱등 — 이미 떠 있으면 URL 만 알려주고 끝낸다).
+#   ./dv-start                  config.json 설정 그대로 기동
+#   ./dv-start --lan            추가 인자는 그대로 docs_viewer.py 로 넘어간다
+#   ./dv-start -n               브라우저를 열지 않는다
+# 로그를 눈앞에서 보고 싶으면 기존 ./dv (포그라운드) 를 쓰면 된다.
+set -e
+DIR=$(cd "$(dirname "$0")" && pwd)
+PIDFILE="$DIR/run.pid"
+LOG="$DIR/run.log"
+
+# 실행 중인 URL 은 로그의 마지막 접속 주소 줄에서 얻는다.
+# (토큰은 실행마다 바뀌므로 포트만으로는 URL 을 만들 수 없다)
+current_url() {
+  grep -o 'http://127\.0\.0\.1:[0-9][^ ]*' "$LOG" 2>/dev/null | tail -1
+}
+
+# 살아있는 뷰어의 PID 를 돌려준다. PID 재사용에 속지 않도록 명령줄까지 확인한다.
+running_pid() {
+  [ -f "$PIDFILE" ] || return 1
+  local pid
+  pid=$(cat "$PIDFILE" 2>/dev/null) || return 1
+  [ -n "$pid" ] || return 1
+  ps -p "$pid" -o command= 2>/dev/null | grep -q 'docs_viewer\.py' || return 1
+  echo "$pid"
+}
+
+if PID=$(running_pid); then
+  echo "이미 실행 중입니다 (pid $PID)"
+  echo "  $(current_url)"
+  exit 0
+fi
+rm -f "$PIDFILE"   # 죽은 프로세스가 남긴 PID 파일 정리
+
+# 사용자가 -n 을 줬는지 기억해둔다. 데몬에는 항상 --no-browser 를 주고,
+# 기동에 성공한 뒤 이 스크립트가 직접 열어야 "떴는데 빈 페이지" 경합이 없다.
+OPEN=1
+for a in "$@"; do
+  case "$a" in -n|--no-browser) OPEN=0 ;; esac
+done
+
+BEFORE=0
+[ -f "$LOG" ] && BEFORE=$(wc -l < "$LOG" | tr -d ' ')
+{ echo; echo "===== 시작: $(date '+%Y-%m-%d %H:%M:%S') ====="; } >> "$LOG"
+
+# python3 -u : 버퍼링을 끄지 않으면 아래 기동 대기가 배너를 못 읽는다
+nohup python3 -u "$DIR/docs_viewer.py" --no-browser "$@" >> "$LOG" 2>&1 &
+PID=$!
+echo "$PID" > "$PIDFILE"
+
+# 배너에 접속 주소가 찍힐 때까지 최대 15초 기다린다
+URL=""
+for _ in $(seq 1 75); do
+  if ! kill -0 "$PID" 2>/dev/null; then break; fi
+  URL=$(tail -n +"$((BEFORE + 1))" "$LOG" | grep -o 'http://127\.0\.0\.1:[0-9][^ ]*' | head -1 || true)
+  [ -n "$URL" ] && break
+  sleep 0.2
+done
+
+if [ -z "$URL" ]; then
+  rm -f "$PIDFILE"
+  kill "$PID" 2>/dev/null || true
+  echo "기동에 실패했습니다. 로그 마지막 20줄:" >&2
+  tail -n 20 "$LOG" >&2
+  exit 1
+fi
+
+echo "docs viewer 를 시작했습니다 (pid $PID)"
+echo "  $URL"
+echo "  로그: $LOG"
+grep -m1 'office  :' <(tail -n +"$((BEFORE + 1))" "$LOG") || true
+if [ "$OPEN" = 1 ]; then
+  # macOS 는 open, 리눅스는 xdg-open. 둘 다 없으면 조용히 넘어간다.
+  { open "$URL" 2>/dev/null || xdg-open "$URL" 2>/dev/null; } || true
+fi
+exit 0
