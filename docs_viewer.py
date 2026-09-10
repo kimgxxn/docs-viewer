@@ -2746,6 +2746,14 @@ body.no-toc #tocbar,#tocbar.empty{display:none}
   font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 .md pre.mermaid .mm-msg{margin-bottom:8px;font-size:12px;color:var(--warn);
   font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+/* 확대 버튼: 다이어그램 위에 올렸을 때만 흐릿하게 나타난다 */
+.md .zoomable{position:relative}
+.md .zbtn{position:absolute;right:6px;top:6px;z-index:2;border:1px solid var(--border);
+  background:var(--panel);color:var(--dim);border-radius:6px;padding:1px 8px;
+  font-size:11.5px;line-height:1.6;cursor:pointer;opacity:.28;transition:opacity .15s}
+.md .zoomable:hover .zbtn,.md .zbtn:focus{opacity:.95}
+.md .zbtn:hover{color:var(--fg);border-color:var(--accent)}
+.md img.zoomable{cursor:zoom-in}
 .md blockquote{margin:1em 0;padding:.1em 1em;border-left:3px solid var(--border);color:var(--dim)}
 .md blockquote.alert{border-left-width:4px;background:var(--panel2);border-radius:0 8px 8px 0;
   padding:.6em 1em;color:var(--fg)}
@@ -2849,6 +2857,28 @@ body.editing .pv{padding:10px 14px}
 .res .rl:hover{color:var(--fg);background:var(--hover);border-radius:4px}
 .res .rl b{color:var(--fg);background:var(--mark);border-radius:2px}
 
+/* 확대 보기 오버레이: 원본은 두고 복제본에 transform 만 걸어 키우고 옮긴다 */
+#zoom{position:fixed;inset:0;z-index:70;background:var(--bg);display:flex;
+  flex-direction:column}
+#zoom[hidden]{display:none}
+#zoom .zbar{flex:none;display:flex;align-items:center;gap:6px;padding:6px 10px;
+  border-bottom:1px solid var(--border);background:var(--panel2);font-size:12.5px}
+#zoom .zt{margin-right:auto;color:var(--dim);overflow:hidden;white-space:nowrap;
+  text-overflow:ellipsis;max-width:45%}
+#zoom .zpct{min-width:54px;text-align:center;color:var(--dim);
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+#zoom .btn{padding:3px 11px;font-size:12px}
+#zoom .zstage{flex:1 1 auto;position:relative;overflow:hidden;background:var(--panel);
+  cursor:grab;touch-action:none}
+#zoom .zstage.grabbing{cursor:grabbing}
+#zoom .zin{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}
+#zoom .zin svg,#zoom .zin img{display:block;max-width:none}
+#zoom .zhint{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);
+  background:var(--panel2);border:1px solid var(--border);border-radius:999px;
+  padding:3px 13px;font-size:11.5px;color:var(--dim);pointer-events:none;opacity:.9;
+  transition:opacity .5s}
+#zoom .zhint.off{opacity:0}
+
 #toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);
   background:var(--panel);border:1px solid var(--border);box-shadow:var(--shadow);
   border-radius:999px;padding:7px 16px;font-size:12.5px;opacity:0;pointer-events:none;
@@ -2908,6 +2938,19 @@ body.editing .pv{padding:10px 14px}
 </div>
 <div id="results" hidden></div>
 <div id="toast"></div>
+<div id="zoom" hidden>
+  <div class="zbar">
+    <span class="zt"></span>
+    <button class="btn sec" data-z="out" title="축소 (-)">&minus;</button>
+    <span class="zpct">100%</span>
+    <button class="btn sec" data-z="in" title="확대 (+)">+</button>
+    <button class="btn sec" data-z="fit" title="화면에 맞춤 (0)">맞춤</button>
+    <button class="btn sec" data-z="one" title="원래 크기 (1)">1:1</button>
+    <button class="btn" data-z="close">닫기 (esc)</button>
+  </div>
+  <div class="zstage"><div class="zin"></div>
+    <div class="zhint">휠 확대 &middot; 드래그 이동 &middot; 더블클릭 맞춤/원본</div></div>
+</div>
 <script>
 'use strict';
 var CFG = null, ST = {mode:'fs', root:null, path:'', doc:null, drive:{id:'root', stack:[]},
@@ -3175,6 +3218,145 @@ function crumb(d){
   c.innerHTML = out.join(' / ');
   document.title = (parts.length ? parts[parts.length-1] : d.rootName) + ' - docs viewer';
 }
+// ---- 확대 보기 ---------------------------------------------------------------
+// 다이어그램(mermaid svg) 과 이미지를 전체 화면으로 띄운다. 원본 DOM 은 그대로 두고
+// 복제본을 stage 에 얹은 뒤 translate+scale 만 바꾼다 (다시 그릴 필요가 없다).
+var ZM = {on:false, s:1, fit:1, w:0, h:0, tx:0, ty:0};
+function zStage(){ return $('#zoom .zstage'); }
+function zSize(){ var r = zStage().getBoundingClientRect(); return {w:r.width, h:r.height}; }
+function zClamp(s){ return Math.min(20, Math.max(0.04, s)); }
+function zApply(){
+  $('#zoom .zin').style.transform =
+    'translate('+ZM.tx.toFixed(1)+'px,'+ZM.ty.toFixed(1)+'px) scale('+ZM.s.toFixed(4)+')';
+  $('#zoom .zpct').textContent = Math.round(ZM.s*100)+'%';
+}
+function zTo(ns, px, py){                    // (px,py) 아래 지점을 붙잡고 배율만 바꾼다
+  ns = zClamp(ns);
+  var k = ns / ZM.s;
+  ZM.tx = px - (px - ZM.tx)*k; ZM.ty = py - (py - ZM.ty)*k;
+  ZM.s = ns; zApply();
+}
+function zCenter(ns){                        // 가운데 정렬 (세로로 길면 위부터)
+  var st = zSize(); ZM.s = zClamp(ns);
+  ZM.tx = (st.w - ZM.w*ZM.s)/2;
+  ZM.ty = ZM.h*ZM.s > st.h ? 12 : (st.h - ZM.h*ZM.s)/2;
+  if (ZM.tx < 12 && ZM.w*ZM.s > st.w) ZM.tx = 12;
+  zApply();
+}
+function zFit(){
+  if (!ZM.w || !ZM.h) return;
+  var st = zSize();
+  ZM.fit = zClamp(Math.min((st.w-32)/ZM.w, (st.h-32)/ZM.h));
+  zCenter(ZM.fit);
+}
+function zStep(k){ var st = zSize(); zTo(ZM.s*k, st.w/2, st.h/2); }
+function zNatural(src){                      // viewBox 가 곧 원본 크기다
+  if ((src.tagName||'').toLowerCase() === 'svg'){
+    var vb = (src.getAttribute('viewBox')||'').trim().split(/[\s,]+/).map(Number);
+    if (vb.length === 4 && vb[2] > 0 && vb[3] > 0) return {w:vb[2], h:vb[3]};
+  }
+  if (src.naturalWidth) return {w:src.naturalWidth, h:src.naturalHeight};
+  var r = src.getBoundingClientRect();
+  return {w:Math.round(r.width)||600, h:Math.round(r.height)||400};
+}
+function openZoom(src, title){
+  if (!src) return;
+  var sz = zNatural(src), node = src.cloneNode(true);
+  node.removeAttribute('width'); node.removeAttribute('height');
+  node.style.width = sz.w+'px'; node.style.height = sz.h+'px';
+  node.style.maxWidth = 'none'; node.style.maxHeight = 'none';
+  ZM.w = sz.w; ZM.h = sz.h;
+  var zin = $('#zoom .zin');
+  zin.innerHTML = ''; zin.appendChild(node);
+  $('#zoom .zt').textContent = title || '';
+  $('#zoom').hidden = false; ZM.on = true;
+  var hint = $('#zoom .zhint');                  // 안내는 잠깐 보였다 사라진다
+  hint.classList.remove('off');
+  clearTimeout(openZoom._t);
+  openZoom._t = setTimeout(function(){ hint.classList.add('off'); }, 2600);
+  zFit();
+}
+function closeZoom(){
+  if (!ZM.on) return;
+  ZM.on = false; $('#zoom').hidden = true; $('#zoom .zin').innerHTML = '';
+}
+function zHeading(el){                       // 바로 위 제목을 캡션으로 쓴다
+  var n = el.previousElementSibling;
+  while (n){
+    if (/^H[1-6]$/.test(n.tagName)) return n.textContent.replace(/\s*#\s*$/, '').trim();
+    n = n.previousElementSibling;
+  }
+  return '다이어그램';
+}
+function zoomTagMermaid(el){                 // 다 그린 mermaid 블록에 확대 버튼을 단다
+  if (!el.querySelector('svg')) return;
+  el.classList.add('zoomable');
+  var b = document.createElement('button');
+  b.type = 'button'; b.className = 'zbtn'; b.textContent = '\u2922 \ud06c\uac8c';
+  b.title = '크게 보기 (다이어그램을 더블클릭해도 됩니다)';
+  b.onclick = function(e){
+    e.preventDefault(); e.stopPropagation();
+    openZoom(el.querySelector('svg'), zHeading(el));
+  };
+  el.appendChild(b);
+  if (!el.dataset.zdbl){                     // 다시 그려도 리스너가 겹치지 않게 한 번만
+    el.dataset.zdbl = '1';
+    el.addEventListener('dblclick', function(){
+      openZoom(el.querySelector('svg'), zHeading(el));
+    });
+  }
+}
+function zoomTagImages(scope){
+  var list = (scope||document).querySelectorAll('.md img, .card img');
+  [].forEach.call(list, function(im){
+    if (im.dataset.zoom) return;
+    im.dataset.zoom = '1';
+    im.classList.add('zoomable');
+    im.addEventListener('click', function(){ openZoom(im, im.getAttribute('alt')||''); });
+  });
+}
+(function(){                                 // 오버레이 조작 (한 번만 묶는다)
+  var z = $('#zoom'); if (!z) return;
+  var stage = zStage(), drag = null;
+  stage.addEventListener('wheel', function(e){
+    e.preventDefault();
+    var r = stage.getBoundingClientRect();
+    // 트랙패드 핀치는 ctrl+wheel 로 온다 - 같은 식에 계수만 키운다
+    zTo(ZM.s * Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0022)),
+        e.clientX - r.left, e.clientY - r.top);
+  }, {passive:false});
+  stage.addEventListener('pointerdown', function(e){
+    if (e.button) return;
+    drag = {x:e.clientX, y:e.clientY, tx:ZM.tx, ty:ZM.ty};
+    stage.classList.add('grabbing');
+    if (stage.setPointerCapture && e.pointerId != null) stage.setPointerCapture(e.pointerId);
+  });
+  stage.addEventListener('pointermove', function(e){
+    if (!drag) return;
+    ZM.tx = drag.tx + (e.clientX - drag.x); ZM.ty = drag.ty + (e.clientY - drag.y); zApply();
+  });
+  function up(){ drag = null; stage.classList.remove('grabbing'); }
+  stage.addEventListener('pointerup', up);
+  stage.addEventListener('pointercancel', up);
+  stage.addEventListener('dblclick', function(e){
+    var r = stage.getBoundingClientRect();
+    if (ZM.s > ZM.fit*1.02) zCenter(ZM.fit);
+    else zTo(1, e.clientX - r.left, e.clientY - r.top);
+  });
+  z.querySelectorAll('[data-z]').forEach(function(b){
+    b.onclick = function(){
+      var a = b.dataset.z;
+      if (a === 'in') zStep(1.3);
+      else if (a === 'out') zStep(1/1.3);
+      else if (a === 'fit') zFit();
+      else if (a === 'one') zCenter(1);
+      else closeZoom();
+    };
+  });
+  window.addEventListener('resize', function(){
+    if (ZM.on && Math.abs(ZM.s - ZM.fit) < 0.005) zFit();   // 맞춤 상태였으면 다시 맞춘다
+  });
+})();
 // ---- mermaid ----------------------------------------------------------------
 // 서버는 ```mermaid 펜스를 <pre class="mermaid" data-mermaid> 로만 내려보낸다.
 // 여기서 스크립트를 한 번 받아 그림으로 바꾼다. data-mermaid 가 남아 있으면
@@ -3226,6 +3408,7 @@ function drawMermaid(scope){
         el.classList.remove('mm-err');
         el.innerHTML = r.svg;
         if (r.bindFunctions) r.bindFunctions(el);
+        zoomTagMermaid(el);
       }).catch(function(e){
         var junk = document.getElementById('d'+id);   // 실패 시 남는 임시 노드
         if (junk) junk.remove();
@@ -3326,6 +3509,7 @@ function render(d, extra){
   setToc(toc, d);
   bindDocBar(d);
   drawMermaid($('#doc'));
+  zoomTagImages($('#doc'));
   var main = $('#main'); main.scrollTop = 0;
   if (extra.h){
     var el = document.getElementById(extra.h);
@@ -3663,6 +3847,7 @@ function updatePreview(d, text){
     if (j.error) throw new Error(j.error);
     pv.innerHTML = '<article class="md">' + j.html + '</article>';
     drawMermaid(pv);
+    zoomTagImages(pv);
     if (st) st.textContent = '';
     if (j.toc) setToc(j.toc);
     if (ST.edToPv) ST.edToPv();               // 렌더 후 현재 위치로 다시 맞춘다
@@ -4058,6 +4243,19 @@ document.querySelectorAll('.tab').forEach(function(t){
 });
 
 document.addEventListener('keydown', function(e){
+  if (ZM.on){                                        // 확대 보기가 떠 있으면 여기서 끝낸다
+    if (e.key==='Escape') closeZoom();
+    else if (e.key==='+'||e.key==='=') zStep(1.3);
+    else if (e.key==='-'||e.key==='_') zStep(1/1.3);
+    else if (e.key==='0') zFit();
+    else if (e.key==='1') zCenter(1);
+    else if (e.key==='ArrowLeft'){ ZM.tx += 60; zApply(); }
+    else if (e.key==='ArrowRight'){ ZM.tx -= 60; zApply(); }
+    else if (e.key==='ArrowUp'){ ZM.ty += 60; zApply(); }
+    else if (e.key==='ArrowDown'){ ZM.ty -= 60; zApply(); }
+    else return;
+    e.preventDefault(); return;
+  }
   if (e.target.tagName==='INPUT' || e.target.tagName==='SELECT'
       || e.target.tagName==='TEXTAREA') return;        // 편집기 입력 보호
   if (e.metaKey||e.ctrlKey||e.altKey) return;
@@ -4115,6 +4313,8 @@ function showWelcome(){
     + '<h3>등록된 폴더</h3><div class="card" style="padding:8px">'+roots+'</div>'
     + '<h3>단축키</h3><p><kbd>/</kbd> 검색 · <kbd>b</kbd> 사이드바 · <kbd>t</kbd> 목차 · '
     + '<kbd>r</kbd> 새로고침 · <kbd>s</kbd> 북마크 · <kbd>esc</kbd> 닫기</p>'
+    + '<p class="muted">다이어그램·이미지는 <b>더블클릭</b>(이미지는 클릭)으로 크게 보기 · '
+    + '휠 확대 · 드래그 이동</p>'
     + '<p class="muted">md · html · 텍스트/코드 · 이미지 · PDF · CSV'
     + (CFG.soffice ? ' · docx/xlsx/pptx' : '')
     + (CFG.drive && CFG.drive.configured ? ' · Google Drive' : '') + ' 지원</p></article>';
