@@ -56,7 +56,7 @@ from pathlib import Path
 
 APP = "docs_viewer"
 APP_TITLE = "docs viewer"
-VERSION = "1.1"
+VERSION = "1.2"
 BASE = Path(__file__).resolve().parent          # 스크립트가 있는 작업 폴더
 # 설정/캐시/Drive 토큰은 모두 작업 폴더 안에 둔다 (DOCS_VIEWER_HOME 으로 변경 가능)
 HOME = Path(os.environ.get("DOCS_VIEWER_HOME") or BASE)
