@@ -56,7 +56,7 @@ from pathlib import Path
 
 APP = "docs_viewer"
 APP_TITLE = "docs viewer"
-VERSION = "1.2.2"
+VERSION = "1.3"
 BASE = Path(__file__).resolve().parent          # 스크립트가 있는 작업 폴더
 # 설정/캐시/Drive 토큰은 모두 작업 폴더 안에 둔다 (DOCS_VIEWER_HOME 으로 변경 가능)
 HOME = Path(os.environ.get("DOCS_VIEWER_HOME") or BASE)
@@ -2693,9 +2693,13 @@ header{display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(-
 #side{width:290px;flex:none;background:var(--panel2);border-right:1px solid var(--border);
   display:flex;flex-direction:column;min-height:0}
 body.no-side #side,body.no-side #resizer{display:none}
-#resizer{flex:none;width:6px;margin-left:-3px;cursor:col-resize;background:transparent;
+#resizer,#toc-resizer{flex:none;width:6px;cursor:col-resize;background:transparent;
   position:relative;z-index:10}
-#resizer:hover,#resizer.dragging{background:var(--accent);opacity:.35}
+#resizer{margin-left:-3px}
+/* 목차 쪽 손잡이는 왼쪽 테두리에 겹쳐 둔다 (본문 폭을 먹지 않게) */
+#toc-resizer{margin-right:-3px}
+#resizer:hover,#resizer.dragging,
+#toc-resizer:hover,#toc-resizer.dragging{background:var(--accent);opacity:.35}
 body.resizing{cursor:col-resize;user-select:none}
 body.resizing iframe{pointer-events:none}
 .side-top{padding:8px;display:flex;flex-direction:column;gap:6px;border-bottom:1px solid var(--border)}
@@ -2754,7 +2758,8 @@ body[data-docw="wide"] .doc{max-width:1440px}
 body[data-docw="full"] .doc{max-width:none}
 #tocbar{width:230px;flex:none;border-left:1px solid var(--border);background:var(--panel2);
   overflow:auto;padding:14px 10px 40px;font-size:12.5px}
-body.no-toc #tocbar,#tocbar.empty{display:none}
+body.no-toc #tocbar,body.no-toc #toc-resizer,
+#tocbar.empty,#toc-resizer.empty{display:none}
 .toc-h{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);
   padding:0 6px 8px}
 #toc a{display:block;padding:3px 6px;border-radius:5px;color:var(--dim);text-decoration:none;
@@ -2956,10 +2961,10 @@ body.editing .pv{padding:10px 14px}
 @keyframes sp{to{transform:rotate(360deg)}}
 @media (max-width:900px){
   #side{position:absolute;z-index:18;height:calc(100% - 44px);box-shadow:var(--shadow)}
-  #tocbar{display:none} .doc{padding:18px 16px 100px} #crumb{display:none}
+  #tocbar,#toc-resizer{display:none} .doc{padding:18px 16px 100px} #crumb{display:none}
 }
 @media print{
-  header,#side,#tocbar,.docbar{display:none!important}
+  header,#side,#resizer,#tocbar,#toc-resizer,.docbar{display:none!important}
   .doc{max-width:none;padding:0}
 }
 </style>
@@ -3000,6 +3005,7 @@ body.editing .pv{padding:10px 14px}
   </aside>
   <div id="resizer" title="드래그해서 너비 조절 (더블클릭: 기본값)"></div>
   <main id="main"><div class="doc" id="doc"></div></main>
+  <div id="toc-resizer" class="empty" title="드래그해서 너비 조절 (더블클릭: 기본값)"></div>
   <aside id="tocbar" class="empty"><div class="toc-h" id="toc-h">목차</div>
     <div id="toc"></div></aside>
 </div>
@@ -3987,13 +3993,15 @@ function watchSheetScroll(){
 }
 
 function setToc(toc, d){
-  var box = $('#toc'), bar = $('#tocbar'), head = $('#toc-h');
+  var box = $('#toc'), bar = $('#tocbar'), head = $('#toc-h'), rz = $('#toc-resizer');
+  // 목차가 비어 바가 숨을 때는 너비 손잡이도 같이 숨긴다.
+  function show(on){ bar.classList.toggle('empty', !on); rz.classList.toggle('empty', !on); }
   // 시트가 여러 장인 office 문서는 헤딩 대신 시트 목록을 싣는다.
   // '문서 안에서 위치 이동' 이라는 점이 목차와 같고, 32장을 가로 탭으로 훑는 것보다
   // 세로 목록이 훨씬 빨리 찾힌다.
   if (d && d.sheets && d.sheets.length > 1){
     head.textContent = '시트 ' + d.sheets.length;
-    bar.classList.remove('empty');
+    show(true);
     box.innerHTML = d.sheets.map(function(sh, i){
       return '<a href="#" data-sheet="'+esc(sh.id)+'" title="'+esc(sh.name)+'"'
         + (i===0?' class="on"':'')+'>'+esc(sh.name)+'</a>'; }).join('');
@@ -4006,8 +4014,8 @@ function setToc(toc, d){
   }
   head.textContent = '목차';
   var items = (toc||[]).filter(function(t){ return t.level<=4; });
-  if (!items.length){ bar.classList.add('empty'); box.innerHTML=''; return; }
-  bar.classList.remove('empty');
+  if (!items.length){ show(false); box.innerHTML=''; return; }
+  show(true);
   box.innerHTML = items.map(function(t){
     return '<a href="#'+encodeURIComponent(t.id)+'" data-l="'+t.level+'" data-id="'+esc(t.id)
       + '">'+esc(t.text)+'</a>'; }).join('');
@@ -4334,34 +4342,43 @@ document.addEventListener('keydown', function(e){
   else if (e.key==='r'){ $('#btn-reload').click(); }
   else if (e.key==='s'){ toggleStar(); }
 });
-/* 사이드바 너비 조절 */
+/* 사이드바·목차 너비 조절 */
 (function(){
-  var rz = $('#resizer'), side = $('#side'), MIN = 170, MAX = 720, DEF = 290;
-  var w = LS.get('sideW', DEF);
-  side.style.width = Math.min(MAX, Math.max(MIN, w)) + 'px';
-  var startX = 0, startW = 0, dragging = false;
-  function down(e){
-    dragging = true; startX = e.clientX; startW = side.offsetWidth;
-    rz.classList.add('dragging'); document.body.classList.add('resizing');
-    if (rz.setPointerCapture && e.pointerId != null) rz.setPointerCapture(e.pointerId);
+  // dir: 손잡이를 끄는 방향과 폭이 늘어나는 방향의 관계.
+  // 왼쪽 트리는 오른쪽으로 끌면(+1), 오른쪽 목차는 왼쪽으로 끌면(-1) 넓어진다.
+  function resizer(rzSel, paneSel, key, DEF, MIN, MAX, dir){
+    var rz = $(rzSel), pane = $(paneSel);
+    pane.style.width = Math.min(MAX, Math.max(MIN, LS.get(key, DEF))) + 'px';
+    var startX = 0, startW = 0, dragging = false;
+    function down(e){
+      // 기본 동작(텍스트 선택 드래그)을 막지 않으면, 목차처럼 커서 밑으로 내용이
+      // 밀려 들어오는 쪽에서 브라우저가 선택 제스처를 시작하며 pointercancel 을
+      // 쏘고 드래그가 첫 걸음에서 끊긴다.
+      e.preventDefault();
+      dragging = true; startX = e.clientX; startW = pane.offsetWidth;
+      rz.classList.add('dragging'); document.body.classList.add('resizing');
+      if (rz.setPointerCapture && e.pointerId != null) rz.setPointerCapture(e.pointerId);
+    }
+    function move(e){
+      if (!dragging) return;
+      var nw = Math.min(MAX, Math.max(MIN, startW + dir * (e.clientX - startX)));
+      pane.style.width = nw + 'px';
+    }
+    function up(){
+      if (!dragging) return;
+      dragging = false; rz.classList.remove('dragging');
+      document.body.classList.remove('resizing');
+      LS.set(key, pane.offsetWidth);
+    }
+    rz.addEventListener('pointerdown', down);
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+    rz.addEventListener('dblclick', function(){
+      pane.style.width = DEF + 'px'; LS.set(key, DEF); });
   }
-  function move(e){
-    if (!dragging) return;
-    var nw = Math.min(MAX, Math.max(MIN, startW + (e.clientX - startX)));
-    side.style.width = nw + 'px';
-  }
-  function up(){
-    if (!dragging) return;
-    dragging = false; rz.classList.remove('dragging');
-    document.body.classList.remove('resizing');
-    LS.set('sideW', side.offsetWidth);
-  }
-  rz.addEventListener('pointerdown', down);
-  window.addEventListener('pointermove', move);
-  window.addEventListener('pointerup', up);
-  window.addEventListener('pointercancel', up);
-  rz.addEventListener('dblclick', function(){
-    side.style.width = DEF + 'px'; LS.set('sideW', DEF); });
+  resizer('#resizer', '#side', 'sideW', 290, 170, 720, 1);
+  resizer('#toc-resizer', '#tocbar', 'tocW', 230, 150, 560, -1);
 })();
 
 window.addEventListener('beforeunload', function(e){
