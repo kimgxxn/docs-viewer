@@ -56,7 +56,7 @@ from pathlib import Path
 
 APP = "docs_viewer"
 APP_TITLE = "docs viewer"
-VERSION = "1.2"
+VERSION = "1.2.1"
 BASE = Path(__file__).resolve().parent          # 스크립트가 있는 작업 폴더
 # 설정/캐시/Drive 토큰은 모두 작업 폴더 안에 둔다 (DOCS_VIEWER_HOME 으로 변경 가능)
 HOME = Path(os.environ.get("DOCS_VIEWER_HOME") or BASE)
@@ -822,6 +822,9 @@ BLOCK_HTML_TAGS = ("div", "table", "thead", "tbody", "tr", "td", "th", "ul", "ol
                    "dt", "dd", "p", "blockquote", "pre", "details", "summary", "figure", "center",
                    "h1", "h2", "h3", "h4", "h5", "h6", "hr", "br", "img", "section", "article")
 ALERT_RE = re.compile(r"^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*$", re.I)
+DETAILS_OPEN_RE = re.compile(r"^\s{0,3}(<details\b[^>]*>)", re.I)
+DETAILS_TAG_RE = re.compile(r"<(/?)details\b[^>]*>", re.I)
+SUMMARY_RE = re.compile(r"^(<summary\b[^>]*>)([\s\S]*?)</summary\s*>", re.I)
 
 PH_OPEN = "\x02"
 PH_CLOSE = "\x03"
@@ -1016,7 +1019,7 @@ class Markdown(object):
         return bool(FENCE_RE.match(line) or ATX_RE.match(line) or HR_RE.match(line)
                     or LIST_RE.match(line) or QUOTE_RE.match(line)
                     or COMMENT_OPEN_RE.match(line)
-                    or re.match(r"^\s{0,3}<(?:%s)[\s/>]" % "|".join(BLOCK_HTML_TAGS), line, re.I))
+                    or re.match(r"^\s{0,3}</?(?:%s)[\s/>]" % "|".join(BLOCK_HTML_TAGS), line, re.I))
 
     @staticmethod
     def _with_line(chunk, no):
@@ -1136,7 +1139,15 @@ class Markdown(object):
                 out.append(blk)
                 continue
 
-            if re.match(r"^\s{0,3}<(?:%s)[\s/>]" % "|".join(BLOCK_HTML_TAGS), line, re.I):
+            mo = DETAILS_OPEN_RE.match(line)
+            if mo:
+                span = self._details_end(lines, i)
+                if span:
+                    out.append(self._details(lines, i, mo, span))
+                    i = span[0] + 1
+                    continue
+
+            if re.match(r"^\s{0,3}</?(?:%s)[\s/>]" % "|".join(BLOCK_HTML_TAGS), line, re.I):
                 buf = []
                 while i < n and lines[i].strip():
                     buf.append(lines[i])
@@ -1169,6 +1180,52 @@ class Markdown(object):
             for k in range(marked, len(out)):
                 out[k] = self._with_line(out[k], base_line + block_start + 1)
         return "\n".join(out)
+
+    @staticmethod
+    def _details_end(lines, i):
+        """<details> 에 대응하는 </details> 의 (줄, 칸). 코드펜스 안은 세지 않는다."""
+        depth, fence, n = 0, None, len(lines)
+        j = i
+        while j < n:
+            fm = FENCE_RE.match(lines[j])
+            if fence is not None:
+                if fm and fm.group(2)[0] == fence[0] and len(fm.group(2)) >= fence[1] \
+                        and not fm.group(3):
+                    fence = None
+                j += 1
+                continue
+            if fm:
+                fence = (fm.group(2)[0], len(fm.group(2)))
+                j += 1
+                continue
+            for mt in DETAILS_TAG_RE.finditer(lines[j]):
+                depth += -1 if mt.group(1) else 1
+                if depth <= 0:
+                    return j, mt.start()
+            j += 1
+        return None
+
+    def _details(self, lines, i, mo, span):
+        """<details> 안을 마크다운으로 다시 렌더한다.
+
+        빈 줄에서 잘라 살균기가 태그를 제멋대로 닫아버리면 접기가 껍데기만 남는다.
+        여는 태그부터 짝이 맞는 </details> 까지를 한 덩어리로 잡아 두는 이유다.
+        """
+        end, ecol = span
+        if i == end:
+            body = [lines[i][mo.end():ecol]]
+        else:
+            body = [lines[i][mo.end():]] + list(lines[i + 1:end]) + [lines[end][:ecol]]
+        text = "\n".join(body).lstrip()
+        head = ""
+        sm = SUMMARY_RE.match(text)
+        if sm:
+            stag = sm.group(1) if self.unsafe else sanitize_tag(sm.group(1))
+            head = "%s%s</summary>" % (stag, self.inline(sm.group(2).strip()))
+            text = text[sm.end():]
+        inner = self._blocks(text.split("\n"))
+        open_tag = mo.group(1) if self.unsafe else sanitize_tag(mo.group(1))
+        return "%s%s\n%s\n</details>" % (open_tag, head, inner)
 
     def _table(self, lines, i):
         def cells(row):
