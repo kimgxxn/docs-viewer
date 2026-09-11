@@ -56,7 +56,7 @@ from pathlib import Path
 
 APP = "docs_viewer"
 APP_TITLE = "docs viewer"
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 BASE = Path(__file__).resolve().parent          # 스크립트가 있는 작업 폴더
 # 설정/캐시/Drive 토큰은 모두 작업 폴더 안에 둔다 (DOCS_VIEWER_HOME 으로 변경 가능)
 HOME = Path(os.environ.get("DOCS_VIEWER_HOME") or BASE)
@@ -862,6 +862,16 @@ def sanitize_tag(token, resolve=None):
     return r if r else html_mod.escape(token, False)
 
 
+def plain_text(frag):
+    """렌더된 HTML 조각에서 표시용 순수 텍스트를 뽑는다.
+
+    태그만 벗기면 `GridResponse<T>` 같은 제목이 목차에서 'GridResponse&lt;T&gt;'
+    로 보인다. 조각 안의 엔티티는 이미 한 번 이스케이프된 것이니 문자로 되돌려
+    넘겨야 화면에 넣을 때 한 번만 이스케이프된다.
+    """
+    return html_mod.unescape(re.sub(r"<[^>]+>", "", frag))
+
+
 class Markdown(object):
     """GFM 부분집합 렌더러: 제목/코드펜스/목록(중첩,체크박스)/표/인용/링크정의/각종 인라인."""
 
@@ -1077,7 +1087,7 @@ class Markdown(object):
                 inner = self.inline(m.group(3))
                 sid = self._slug(m.group(3))
                 self.toc.append({"level": level, "id": sid,
-                                 "text": re.sub(r"<[^>]+>", "", inner)})
+                                 "text": plain_text(inner)})
                 out.append('<h%d id="%s">%s<a class="hanchor" href="#%s">#</a></h%d>'
                            % (level, sid, inner, sid, level))
                 i += 1
@@ -1170,7 +1180,7 @@ class Markdown(object):
                 raw = " ".join(x.strip() for x in buf)
                 inner = self.inline(raw)
                 sid = self._slug(raw)
-                self.toc.append({"level": level, "id": sid, "text": re.sub(r"<[^>]+>", "", inner)})
+                self.toc.append({"level": level, "id": sid, "text": plain_text(inner)})
                 out.append('<h%d id="%s">%s<a class="hanchor" href="#%s">#</a></h%d>'
                            % (level, sid, inner, sid, level))
                 i += 1
