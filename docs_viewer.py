@@ -4,7 +4,7 @@
 docs viewer - 로컬 문서 뷰어 (단일 파일 / 표준 라이브러리만 사용)
 
   python3 docs_viewer.py ~/docs ~/workspace/notes
-  python3 docs_viewer.py --no-token --port 8765 .
+  python3 docs_viewer.py --no-token --port 7890 .
 
 지원 포맷
   Markdown(.md/.markdown/.mdx, mermaid 다이어그램 포함), HTML, 텍스트/코드,
@@ -62,7 +62,7 @@ BASE = Path(__file__).resolve().parent          # 스크립트가 있는 작업 
 HOME = Path(os.environ.get("DOCS_VIEWER_HOME") or BASE)
 CACHE = HOME / "cache"
 ASSETS = HOME / "assets"
-DEFAULT_PORT = 8765
+DEFAULT_PORT = 7890
 
 # mermaid 다이어그램은 파이썬만으로 그릴 수 없어 브라우저에서 렌더한다.
 # 스크립트는 assets/ 에 두면 그것을 쓰고, 없으면 처음 필요할 때 한 번만
@@ -89,6 +89,8 @@ class Config(object):
         self.allow_edit = False  # 분할 편집기에서 파일 저장 허용
         self.host_names = set()  # Host 헤더로 허용할 이름 (호스트명 등)
         self.mermaid = True      # mermaid 펜스를 다이어그램으로 렌더
+        self.share_port = 0      # 사내망 공유 전용 포트 (0 이면 공유 꺼짐)
+        self.share_base = ""     # 공유 링크 앞부분 (http://<LAN IP>:<share_port>)
 
 
 CFG = Config()
@@ -1678,6 +1680,9 @@ def build_doc(rid, rel):
         "absPath": str(p), "size": st.st_size, "sizeText": fmt_size(st.st_size),
         "mtime": int(st.st_mtime), "rawUrl": raw_url(rid, rel), "toc": [],
     }
+    tok = share_token_of(p) if CFG.share_port else None
+    if tok:
+        doc["shareUrl"] = share_url(tok)
     dir_rel = posixpath.dirname(rel)
     if kind == "md":
         text, truncated = read_text(p)
@@ -1733,6 +1738,98 @@ def build_doc(rid, rel):
             doc["officeError"] = ("LibreOffice(soffice) 가 없어 변환할 수 없습니다."
                                   if not CFG.soffice else "변환에 실패했습니다.")
     return doc
+
+
+# ---------------------------------------------------------------- 사내망 공유
+# shares.json = {토큰: {"path": 실제 경로, "created": 시각}}. 요청마다 다시 읽으므로
+# 파일에서 줄을 지우면 재시작 없이 그 링크가 바로 막힌다.
+SHARES = HOME / "shares.json"
+_shares_lock = threading.Lock()
+
+
+def shares_load():
+    try:
+        return json.loads(SHARES.read_text("utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def shares_save(d):
+    tmp = SHARES.with_name(SHARES.name + ".tmp")
+    tmp.write_text(json.dumps(d, ensure_ascii=False, indent=2), "utf-8")
+    try:
+        os.chmod(str(tmp), 0o600)
+    except OSError:
+        pass
+    os.replace(str(tmp), str(SHARES))
+
+
+def share_url(tok):
+    return "%s/s/%s" % (CFG.share_base, tok)
+
+
+def share_token_of(p):
+    for t, v in shares_load().items():
+        if v.get("path") == str(p):
+            return t
+    return None
+
+
+def share_add(rid, rel):
+    p = safe_path(rid, rel)
+    if not p.is_file():
+        raise FileNotFoundError(rel)
+    with _shares_lock:
+        d = shares_load()
+        for t, v in d.items():
+            if v.get("path") == str(p):
+                return t
+        t = secrets.token_urlsafe(16)
+        d[t] = {"path": str(p), "created": int(time.time())}
+        shares_save(d)
+        return t
+
+
+def share_remove(rid, rel):
+    p = safe_path(rid, rel)
+    with _shares_lock:
+        d = shares_load()
+        shares_save({t: v for t, v in d.items() if v.get("path") != str(p)})
+
+
+def share_target(tok):
+    """토큰이 가리키는 (rid, rel). 지금도 등록된 폴더 안의 파일이어야 한다 (아니면 None)."""
+    v = shares_load().get(tok)
+    if not isinstance(v, dict) or not v.get("path"):
+        return None
+    p = Path(v["path"])
+    for r in CFG.roots:
+        try:
+            rel = str(p.relative_to(r["path"]))
+            # 공유 뒤에 심볼릭 링크로 바꿔치기해 폴더 밖을 가리키는 경우도 여기서 막힌다
+            if safe_path(r["id"], rel).is_file():
+                return r["id"], rel
+        except (ValueError, PermissionError):
+            continue
+    return None
+
+
+def share_md(tok, rid, rel):
+    """공유용 md 렌더. 이미지는 문서가 실제로 참조한 것만 /s/<tok>/<n> 으로 내준다.
+
+    (html 본문, ["rid/rel", ...]) 를 돌려준다. 원본 HTML 은 설정과 무관하게 살균한다.
+    """
+    text, _ = read_text(safe_path(rid, rel))
+    base, imgs = fs_link_resolver(rid, posixpath.dirname(rel)), []
+
+    def resolve(url, is_img):
+        u, attrs = base(url, is_img)
+        if is_img and u.startswith("/f/"):
+            imgs.append(urllib.parse.unquote(u[3:]))
+            return "/s/%s/%d" % (tok, len(imgs) - 1), {}
+        return u, attrs
+    body, _toc = render_markdown(text, resolve, False)
+    return body, imgs
 
 
 # ---------------------------------------------------------------- Google Drive
@@ -2098,7 +2195,7 @@ class Handler(BaseHTTPRequestHandler):
         raw = (self.headers.get("Host") or "").strip().lower()
         if not raw:
             return False
-        # host:port 분리 (IPv6 리터럴 [::1]:8765 형태 포함)
+        # host:port 분리 (IPv6 리터럴 [::1]:7890 형태 포함)
         if raw.startswith("["):
             name = raw.split("]")[0].lstrip("[")
             port = raw.split("]")[-1].lstrip(":")
@@ -2191,6 +2288,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(self._preview(data))
             elif path == "/api/save":
                 self._json(self._save(data))
+            elif path in ("/api/share", "/api/unshare") and CFG.share_port:
+                rid, rel = data.get("root") or "", data.get("path") or ""
+                if path == "/api/share":
+                    self._json({"url": share_url(share_add(rid, rel))})
+                else:
+                    share_remove(rid, rel)
+                    self._json({"url": ""})
             else:
                 self._err(404, "not found: %s" % path)
         except PermissionError as e:
@@ -2321,7 +2425,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if path.startswith("/f/"):
             dest = (self.headers.get("Sec-Fetch-Dest") or "").lower()
-            if not authed and dest not in SUBRESOURCE_DESTS:
+            # Sec-Fetch-Dest 는 curl 등으로 위조할 수 있다. 토큰 없는 서브리소스 예외는
+            # 같은 머신(루프백)에서 온 요청에만 준다 (--lan 에서 파일이 새지 않게).
+            loopback = self.client_address[0] in LOOPBACK_NAMES
+            if not authed and not (loopback and dest in SUBRESOURCE_DESTS):
                 self._send(403, "forbidden\n", head=head)
                 return
             self._serve_file(path[3:], qs, head)
@@ -2421,6 +2528,7 @@ class Handler(BaseHTTPRequestHandler):
             "canEdit": CFG.allow_edit,
             "mermaid": {"on": CFG.mermaid, "ver": MERMAID_VER},
             "showHidden": CFG.show_hidden,
+            "share": bool(CFG.share_port),
         }
 
     # ---- mermaid 스크립트 ----
@@ -3572,6 +3680,7 @@ function render(d, extra){
   if (d.rawUrl && d.kind !== 'binary')
     bar.push('<a class="chip" href="'+esc(d.rawUrl)
       + (d.rawUrl.indexOf('?')<0?'?dl=1':'&dl=1')+'">다운로드</a>');
+  if (CFG.share && d.root && ['dir','gstub'].indexOf(d.kind) < 0) bar.push(shareBox(d));
   // 목차를 꺼둔 사람은 시트 목록이 통째로 안 보인다. 있다는 사실만 알려준다.
   if (d.sheets && d.sheets.length > 1 && document.body.classList.contains('no-toc'))
     bar.push('<span class="chip">시트 '+d.sheets.length+'개 · <b>t</b> 로 목차 열기</span>');
@@ -3601,6 +3710,16 @@ function render(d, extra){
 function btn(act, label){
   return '<button class="ico" data-act="'+act+'" style="border-color:var(--border);'
     + 'font-size:12px;padding:2px 10px">'+esc(label)+'</button>';
+}
+function shareBox(d){
+  return '<span id="sharebox" class="row">' + (d.shareUrl
+    ? '<span class="chip" title="'+esc(d.shareUrl)+'">공유 중</span>'
+      + btn('copylink', '링크 복사') + btn('unshare', '공유 해제')
+    : btn('share', '공유')) + '</span>';
+}
+function copyLink(u){
+  (navigator.clipboard ? navigator.clipboard.writeText(u) : Promise.reject()).then(function(){ toast('링크 복사됨 · ' + u, 3200); },
+    function(){ prompt('공유 링크 (복사해서 전달하세요)', u); });
 }
 function dirList(d){
   if (!d.entries.length) return '<p class="muted">빈 폴더</p>';
@@ -3656,6 +3775,24 @@ function bindDocBar(d){
         b.classList.toggle('on');
         var t = $('#txt'); if (t) t.classList.toggle('wrap');
         LS.set('wrap', b.classList.contains('on'));
+      } else if (act === 'copylink'){
+        copyLink(d.shareUrl);
+      } else if (act === 'share' || act === 'unshare'){
+        if (act === 'unshare' && !confirm('공유를 해제할까요? 이미 전달한 링크는 더 이상 열리지 않습니다.'))
+          return;
+        fetch('/api/' + act, {
+          method: 'POST', credentials: 'same-origin',
+          headers: {'Content-Type': 'application/json', 'X-Docs-Viewer': '1'},
+          body: JSON.stringify({root: d.root, path: d.path})
+        }).then(function(r){ return r.json(); }).then(function(j){
+          if (j.error) throw new Error(j.error);
+          d.shareUrl = j.url;
+          if (ST.doc) ST.doc.shareUrl = j.url;
+          // 다시 그리지 않고 버튼만 바꾼다 (분할 편집 중이어도 안전하게)
+          $('#sharebox').outerHTML = shareBox(d);
+          bindDocBar(d);
+          if (j.url) copyLink(j.url); else toast('공유 해제됨');
+        }).catch(function(e){ toast('공유 실패: ' + e.message, 3200); });
       }
     };
     if (b.dataset.act === 'wrap' && LS.get('wrap',false)) b.classList.add('on');
@@ -4530,6 +4667,81 @@ class Server(ThreadingHTTPServer):
     allow_reuse_address = True
 
 
+SHARE_JS = """(function(){
+var l=document.querySelectorAll('pre.mermaid[data-mermaid]'); if(!l.length) return;
+var s=document.createElement('script'); s.src='/assets/%s';
+s.onload=function(){
+  mermaid.initialize({startOnLoad:false, securityLevel:'strict', fontFamily:'inherit',
+    theme: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default'});
+  [].forEach.call(l, function(el, i){
+    mermaid.render('mmd'+i, el.textContent).then(function(r){
+      el.removeAttribute('data-mermaid'); el.innerHTML = r.svg; }).catch(function(){});
+  });
+};
+document.head.appendChild(s);
+})();""" % MERMAID_FILE
+
+
+class ShareHandler(Handler):
+    """사내망 공유 전용 포트. /s/<토큰> 으로 공유한 파일 하나만 내주고 나머지는 전부 404.
+
+    뷰어 화면·폴더 목록·검색·API 는 이 포트에 아예 없다. 토큰이 곧 권한이라
+    Host 검증은 하지 않는다 (rebinding 으로 얻을 수 있는 것도 토큰을 아는 문서뿐).
+    """
+
+    def do_POST(self):
+        self._send(405, "method not allowed\n")
+
+    def _route(self, head=False):
+        path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
+        if path == "/assets/" + MERMAID_FILE:          # 공개 라이브러리
+            self._serve_mermaid(head)
+            return
+        m = re.match(r"^/s/([\w-]{16,64})(?:/(\d{1,4}))?$", path)
+        target = share_target(m.group(1)) if m else None
+        if not target:
+            self._send(404, "not found\n", head=head)
+            return
+        tok, (rid, rel) = m.group(1), target
+        is_md = kind_of(Path(rel)) == "md"
+        if m.group(2) is None and not is_md:
+            self._serve_file(rid + "/" + rel, {}, head)
+            return
+        try:
+            body, imgs = share_md(tok, rid, rel) if is_md else ("", [])
+        except (OSError, PermissionError):
+            self._send(404, "not found\n", head=head)
+            return
+        if m.group(2) is None:
+            nonce = secrets.token_urlsafe(12)
+            page = ('<!doctype html><html lang="ko"><head><meta charset="utf-8">'
+                    '<meta name="viewport" content="width=device-width, initial-scale=1">'
+                    '<title>%s</title>%s</head><body><main><article class="doc md">%s'
+                    '</article></main><script nonce="%s">%s</script></body></html>'
+                    % (html_mod.escape(Path(rel).name),
+                       PAGE[PAGE.index("<style>"):PAGE.index("</style>") + 8],
+                       body, nonce, SHARE_JS))
+            self._send(200, page, "text/html; charset=utf-8", extra={
+                "Content-Security-Policy": (
+                    "default-src 'none'; script-src 'self' 'nonce-%s'; "
+                    "style-src 'unsafe-inline'; img-src 'self' data:; font-src data:; "
+                    "base-uri 'none'; form-action 'none'; frame-ancestors 'none'" % nonce)},
+                head=head)
+            return
+        # 문서가 참조한 이미지만. ![](설정파일.json) 같은 참조로 다른 파일이 새지 않게 종류도 본다.
+        n = int(m.group(2))
+        if n < len(imgs):
+            irid, _, irel = imgs[n].partition("/")
+            try:
+                ok = kind_of(safe_path(irid, irel)) == "image"
+            except (KeyError, PermissionError):
+                ok = False
+            if ok:
+                self._serve_file(imgs[n], {}, head)
+                return
+        self._send(404, "not found\n", head=head)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="docs_viewer.py",
@@ -4539,6 +4751,8 @@ def main(argv=None):
     ap.add_argument("--host", default=None, help="바인딩 주소 (기본 127.0.0.1)")
     ap.add_argument("--lan", action="store_true",
                     help="같은 네트워크의 다른 기기에서도 접속 허용 (--host 0.0.0.0 과 동일)")
+    ap.add_argument("--share-port", type=int, default=None,
+                    help="사내망 공유 전용 포트 (공유한 파일만 열림, 기본 꺼짐)")
     ap.add_argument("-n", "--no-browser", action="store_true", help="브라우저 자동 실행 안 함")
     ap.add_argument("--allow-edit", action="store_true",
                     help="분할 편집기에서 파일 저장 허용 (기본은 읽기 전용)")
@@ -4597,6 +4811,15 @@ def main(argv=None):
     url = "http://%s:%d/%s" % (disp_host, CFG.port,
                                ("?t=%s" % CFG.token) if CFG.token else "")
     httpd = Server((CFG.host, CFG.port), Handler)
+    CFG.share_port = args.share_port or int(conf.get("share_port") or 0)
+    if CFG.share_port:
+        try:
+            shttpd = Server(("0.0.0.0", CFG.share_port), ShareHandler)
+        except OSError as e:
+            raise SystemExit("공유 포트 %d 를 열 수 없습니다: %s" % (CFG.share_port, e))
+        CFG.share_base = "http://%s:%d" % ((local_ips() or [socket.gethostname()])[0],
+                                           CFG.share_port)
+        threading.Thread(target=shttpd.serve_forever, daemon=True).start()
 
     line = "-" * 62
     print(line)
@@ -4628,6 +4851,9 @@ def main(argv=None):
             print("  http://%s:%d/?t=%s" % (ip, CFG.port, CFG.token))
     if not CFG.token:
         print("  http://localhost:%d/            (토큰 없음 - 루프백 전용)" % CFG.port)
+    if CFG.share_port:
+        print("  공유    : %s/s/<토큰>  (공유한 파일만 열림 · 현재 %d개 · %s)"
+              % (CFG.share_base, len(shares_load()), SHARES))
     print("  (Ctrl+C 로 종료)")
     print(line)
     if CFG.lan:

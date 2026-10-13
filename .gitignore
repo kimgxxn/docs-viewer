@@ -2,6 +2,7 @@
 config.json
 gdrive_token.json
 gdrive_client.json
+shares.json
 cache/
 run.log
 run.pid
