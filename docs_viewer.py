@@ -3135,7 +3135,7 @@ body.editing .pv{padding:10px 14px}
 <script>
 'use strict';
 var CFG = null, ST = {mode:'fs', root:null, path:'', doc:null, drive:{id:'root', stack:[]},
-                     mtime:0, expanded:{}, tree:{}, loading:{}, searchScope:'all'};
+                     mtime:0, expanded:{}, tree:{}, loading:{}, searchScope:'all', scripts:{}};
 var $ = function(s){ return document.querySelector(s); };
 var LS = {
   get:function(k,d){ try{ var v=localStorage.getItem('dv.'+k); return v==null?d:JSON.parse(v); }
@@ -3636,10 +3636,13 @@ function render(d, extra){
     bar.push(btn('split', '분할 편집'));
   } else if (d.kind === 'html'){
     var url = d.rawUrl || d.url;
-    body = '<iframe class="frame" id="ifr" src="'+esc(url)+'" '
-      + 'sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"></iframe>';
+    var js = !!ST.scripts[url];                 // 허용은 탭 메모리에만 - 자동 갱신엔 유지, 탭 닫으면 초기화
+    body = '<iframe class="frame" id="ifr" src="'
+      + esc(js ? url+(url.indexOf('?')<0?'?':'&')+'scripts=1' : url)+'" sandbox="'
+      + (js ? 'allow-scripts allow-popups' : 'allow-same-origin allow-popups allow-popups-to-escape-sandbox')
+      + '"></iframe>';
     bar.push(btn('split', '분할 편집'));
-    bar.push(btn('scripts', '스크립트 허용'));
+    bar.push(btn('scripts', '스크립트 허용', js));
   } else if (d.kind === 'text'){
     body = textView(d.content||'', d.lines);
     bar.push(btn('split', '편집'));
@@ -3707,8 +3710,8 @@ function render(d, extra){
       setTimeout(function(){ ln.scrollIntoView({block:'center'}); }, 30); }
   }
 }
-function btn(act, label){
-  return '<button class="ico" data-act="'+act+'" style="border-color:var(--border);'
+function btn(act, label, on){
+  return '<button class="ico'+(on?' on':'')+'" data-act="'+act+'" style="border-color:var(--border);'
     + 'font-size:12px;padding:2px 10px">'+esc(label)+'</button>';
 }
 function shareBox(d){
@@ -3763,14 +3766,11 @@ function bindDocBar(d){
         host.insertAdjacentHTML('beforeend', splitMarkup(d));
         bindSplit(d);
       } else if (act === 'scripts'){
-        var f = $('#ifr'); if (!f) return;
-        b.classList.toggle('on');
-        var on = b.classList.contains('on');
-        f.setAttribute('sandbox', on ? 'allow-scripts allow-popups'
-                                     : 'allow-same-origin allow-popups');
-        var u = (d.rawUrl||'').split('?')[0];
-        f.src = u + (on ? '?scripts=1' : '');
-        toast(on ? '스크립트 허용 (격리 실행)' : '스크립트 차단');
+        if (!$('#ifr')) return;
+        var on = !b.classList.contains('on');
+        if (on) ST.scripts[d.rawUrl || d.url] = true; else delete ST.scripts[d.rawUrl || d.url];
+        render(d, {});
+        toast(on ? '스크립트 허용 (격리 실행, 이 탭에서 유지)' : '스크립트 차단');
       } else if (act === 'wrap'){
         b.classList.toggle('on');
         var t = $('#txt'); if (t) t.classList.toggle('wrap');
