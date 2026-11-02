@@ -4705,7 +4705,8 @@ class ShareHandler(Handler):
         tok, (rid, rel) = m.group(1), target
         is_md = kind_of(Path(rel)) == "md"
         if m.group(2) is None and not is_md:
-            self._serve_file(rid + "/" + rel, {}, head)
+            # 받는 쪽엔 토글이 없으니 html 은 스크립트 허용으로 (sandbox 라 opaque origin 은 그대로)
+            self._serve_file(rid + "/" + rel, {"scripts": ["1"]}, head)
             return
         try:
             body, imgs = share_md(tok, rid, rel) if is_md else ("", [])

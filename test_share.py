@@ -67,6 +67,14 @@ class ShareTest(unittest.TestCase):
         self.assertEqual(self.get("/s/" + tok), (200, "%PDF fake"))
         self.assertEqual(self.get("/s/%s/0" % tok)[0], 404)
 
+    def test_html_scripts(self):
+        (self.root / "app.html").write_text("<script>1</script>", "utf-8")
+        tok = dv.share_add("r0", "app.html")
+        with urllib.request.urlopen(self.url + "/s/" + tok) as r:
+            csp = r.headers["Content-Security-Policy"]
+        self.assertIn("allow-scripts", csp)
+        self.assertNotIn("allow-same-origin", csp)              # 스크립트는 돌되 출처는 격리
+
     def test_nothing_else(self):
         for p in ("/", "/api/config", "/api/tree?root=r0", "/f/r0/secret.txt",
                   "/s/" + "x" * 22, "/s/../secret.txt", "/preview/x", "/office/abc/x"):
