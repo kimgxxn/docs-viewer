@@ -76,7 +76,7 @@ class ShareTest(unittest.TestCase):
         self.assertNotIn("allow-same-origin", csp)              # 스크립트는 돌되 출처는 격리
 
     def test_nothing_else(self):
-        for p in ("/", "/api/config", "/api/tree?root=r0", "/f/r0/secret.txt",
+        for p in ("/", "/api/config", "/api/shares", "/api/tree?root=r0", "/f/r0/secret.txt",
                   "/s/" + "x" * 22, "/s/../secret.txt", "/preview/x", "/office/abc/x"):
             self.assertEqual(self.get(p)[0], 404, p)
         self.assertEqual(self.get("/api/save", data=b"{}")[0], 405)

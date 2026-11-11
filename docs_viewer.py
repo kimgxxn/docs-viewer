@@ -2471,6 +2471,15 @@ class Handler(BaseHTTPRequestHandler):
                 p = safe_path((qs.get("root") or [""])[0], (qs.get("path") or [""])[0])
                 st = p.stat()
                 self._json({"mtime": int(st.st_mtime), "size": st.st_size}, head=head)
+            elif path == "/api/shares" and CFG.share_port:
+                items = []
+                for t in shares_load():
+                    hit = share_target(t)   # 폴더 밖이 됐거나 지워진 파일은 빼고
+                    if hit:
+                        p = safe_path(*hit)
+                        items.append({"mode": "fs", "root": hit[0], "path": hit[1],
+                                      "name": p.name, "kind": kind_of(p)})
+                self._json({"items": items}, head=head)
             elif path == "/api/search":
                 res, capped, skipped = search((qs.get("q") or [""])[0],
                                               (qs.get("root") or [""])[0])
@@ -3109,6 +3118,7 @@ body.editing .pv{padding:10px 14px}
     <div class="side-foot">
       <details id="bm-box" open><summary>북마크</summary><div id="bm"></div></details>
       <details id="rc-box"><summary>최근 본 문서</summary><div id="rc"></div></details>
+      <details id="sh-box" hidden><summary>공유 중인 문서</summary><div id="sh"></div></details>
     </div>
   </aside>
   <div id="resizer" title="드래그해서 너비 조절 (더블클릭: 기본값)"></div>
@@ -3792,6 +3802,7 @@ function bindDocBar(d){
           $('#sharebox').outerHTML = shareBox(d);
           bindDocBar(d);
           if (j.url) copyLink(j.url); else toast('공유 해제됨');
+          loadShares();
         }).catch(function(e){ toast('공유 실패: ' + e.message, 3200); });
       }
     };
@@ -4274,9 +4285,16 @@ function syncStar(){
   $('#btn-star').innerHTML = on ? '&#9733;' : '&#9734;';
   $('#btn-star').classList.toggle('on', on);
 }
+function loadShares(){
+  if (!CFG || !CFG.share) return;
+  api('/api/shares').then(function(j){
+    ST.shares = j.items; $('#sh-box').hidden = false; renderLists();
+  }).catch(function(){});
+}
 function renderLists(){
-  ['bm','rc'].forEach(function(which){
-    var items = LS.get(which==='bm'?'bm':'recent', []);
+  var src = {bm: LS.get('bm', []), rc: LS.get('recent', []), sh: ST.shares || []};
+  ['bm','rc','sh'].forEach(function(which){
+    var items = src[which];
     var host = $('#'+which);
     if (!items.length){ host.innerHTML='<div class="muted" style="padding:4px 6px">없음</div>';
       return; }
@@ -4555,6 +4573,7 @@ $('#btn-scope').classList.toggle('on', ST.searchScope==='root');
 renderLists();
 api('/api/config').then(function(c){
   CFG = c;
+  loadShares();
   if (!c.driveTab){                     // OAuth 미설정이면 Drive 탭 자체를 감춘다
     var tabs = document.querySelector('.tabs');
     if (tabs) tabs.hidden = true;
