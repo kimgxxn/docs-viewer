@@ -2836,11 +2836,12 @@ body.resizing iframe{pointer-events:none}
 .side-foot{flex:0 0 auto;min-height:0;max-height:45%;overflow:hidden;
   display:flex;flex-direction:column;
   border-top:1px solid var(--border);padding:2px 6px 8px}
-.side-foot details{display:flex;flex-direction:column;min-height:0;flex:0 0 auto}
-.side-foot details[open]{flex:1 1 auto}
-.side-foot summary{flex:none;cursor:pointer;font-size:12px;color:var(--dim);padding:6px 2px;
-  user-select:none}
-.side-foot details>div{flex:1 1 auto;min-height:0;overflow:auto}
+/* details 안 내용은 브라우저 내부 슬롯에 들어가 flex 크기가 안 먹는다.
+   그래서 details 자체를 스크롤시키고 제목(summary)만 위에 붙여 둔다. */
+.side-foot details{min-height:0;flex:0 0 auto}
+.side-foot details[open]{flex:1 1 auto;overflow:auto;min-height:4em}
+.side-foot summary{cursor:pointer;font-size:12px;color:var(--dim);padding:6px 2px;
+  user-select:none;position:sticky;top:0;z-index:1;background:var(--panel2)}
 .node{display:flex;align-items:center;gap:5px;padding:3px 6px;border-radius:6px;cursor:pointer;
   white-space:nowrap;overflow:hidden}
 .node:hover{background:var(--hover)}
